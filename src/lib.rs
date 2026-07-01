@@ -91,10 +91,13 @@
 //! # use bevy::prelude::*;
 //! #
 //! pub struct TranslationEasingState {
-//!     pub start: Option<Vec3>,
-//!     pub end: Option<Vec3>,
+//!     pub start: Option<TVec3>,
+//!     pub end: Option<TVec3>,
 //! }
 //! ```
+//!
+//! The states are stored at transform precision ([`TVec3`] and [`TQuat`] resolve to the same
+//! scalar type as [`Transform`]), so no precision is lost when interpolating positions.
 //!
 //! The states are updated by the [`TransformInterpolationPlugin`] or [`TransformExtrapolationPlugin`]
 //! depending on whether the entity has [`TransformInterpolation`] or [`TransformExtrapolation`] components.
@@ -162,6 +165,7 @@ use interpolation::*;
 
 use bevy::{
     ecs::{change_detection::Tick, query::QueryData, system::SystemChangeTick},
+    math::{TQuat, TVec3, ToPrecision},
     prelude::*,
 };
 
@@ -437,9 +441,9 @@ impl VelocitySource for () {
 #[reflect(Component, Debug, Default)]
 pub struct TranslationEasingState {
     /// The start translation for the interpolation.
-    pub start: Option<Vec3>,
+    pub start: Option<TVec3>,
     /// The end translation for the interpolation.
-    pub end: Option<Vec3>,
+    pub end: Option<TVec3>,
 }
 
 /// Stores the start and end states used for interpolating the rotation of an entity.
@@ -453,9 +457,9 @@ pub struct TranslationEasingState {
 #[reflect(Component, Debug, Default)]
 pub struct RotationEasingState {
     /// The start rotation for the interpolation.
-    pub start: Option<Quat>,
+    pub start: Option<TQuat>,
     /// The end rotation for the interpolation.
-    pub end: Option<Quat>,
+    pub end: Option<TQuat>,
 }
 
 /// Stores the start and end states used for interpolating the scale of an entity.
@@ -469,9 +473,9 @@ pub struct RotationEasingState {
 #[reflect(Component, Debug, Default)]
 pub struct ScaleEasingState {
     /// The start scale for the interpolation.
-    pub start: Option<Vec3>,
+    pub start: Option<TVec3>,
     /// The end scale for the interpolation.
-    pub end: Option<Vec3>,
+    pub end: Option<TVec3>,
 }
 
 fn update_last_easing_tick(
@@ -583,7 +587,7 @@ fn ease_translation_lerp(
 
     query.iter_mut().for_each(|(mut transform, interpolation)| {
         if let (Some(start), Some(end)) = (interpolation.start, interpolation.end) {
-            transform.translation = start.lerp(end, overstep);
+            transform.translation = start.lerp(end, overstep.to_precision());
         }
     });
 }
@@ -604,7 +608,7 @@ fn ease_rotation_slerp(
             if let (Some(start), Some(end)) = (interpolation.start, interpolation.end) {
                 // Note: `slerp` will always take the shortest path, but when the two rotations are more than
                 // 180 degrees apart, this can cause visual artifacts as the rotation "flips" to the other side.
-                transform.rotation = start.slerp(end, overstep);
+                transform.rotation = start.slerp(end, overstep.to_precision());
             }
         });
 }
@@ -618,7 +622,7 @@ fn ease_scale_lerp(
 
     query.iter_mut().for_each(|(mut transform, interpolation)| {
         if let (Some(start), Some(end)) = (interpolation.start, interpolation.end) {
-            transform.scale = start.lerp(end, overstep);
+            transform.scale = start.lerp(end, overstep.to_precision());
         }
     });
 }

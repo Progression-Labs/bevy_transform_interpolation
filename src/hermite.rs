@@ -1,9 +1,11 @@
 //! Hermite interpolation for [`Transform`] easing.
 
-use core::{f32::consts::TAU, marker::PhantomData};
+use core::{f64::consts::TAU, marker::PhantomData};
 
-use bevy::prelude::*;
-use ops::FloatPow;
+use bevy::{
+    math::{TQuat, TVec3, ToPrecision, ToRender},
+    prelude::*,
+};
 
 use crate::{
     NoRotationEasing, NoTranslationEasing, NonlinearRotationEasing, NonlinearTranslationEasing,
@@ -302,15 +304,17 @@ fn ease_translation_hermite<V: VelocitySource>(
     time: Res<Time<Fixed>>,
 ) {
     let overstep = time.overstep_fraction();
-    let delta_secs = time.delta_secs();
+    let delta_secs = time.delta_secs().to_precision();
 
     query
         .par_iter_mut()
         .for_each(|(mut transform, interpolation, start_vel, end_vel)| {
             if let (Some(start), Some(end)) = (interpolation.start, interpolation.end) {
                 let vel0 =
-                    <V::Item<'static, 'static> as VelocitySourceItem<V>>::previous(start_vel);
-                let vel1 = <V::Item<'static, 'static> as VelocitySourceItem<V>>::current(end_vel);
+                    <V::Item<'static, 'static> as VelocitySourceItem<V>>::previous(start_vel)
+                        .to_precision();
+                let vel1 = <V::Item<'static, 'static> as VelocitySourceItem<V>>::current(end_vel)
+                    .to_precision();
                 transform.translation =
                     hermite_vec3(start, end, delta_secs * vel0, delta_secs * vel1, overstep);
             }
@@ -331,15 +335,17 @@ fn ease_rotation_hermite<V: VelocitySource>(
     time: Res<Time<Fixed>>,
 ) {
     let overstep = time.overstep_fraction();
-    let delta_secs = time.delta_secs();
+    let delta_secs = time.delta_secs().to_precision();
 
     query
         .par_iter_mut()
         .for_each(|(mut transform, interpolation, start_vel, end_vel)| {
             if let (Some(start), Some(end)) = (interpolation.start, interpolation.end) {
                 let vel0 =
-                    <V::Item<'static, 'static> as VelocitySourceItem<V>>::previous(start_vel);
-                let vel1 = <V::Item<'static, 'static> as VelocitySourceItem<V>>::current(end_vel);
+                    <V::Item<'static, 'static> as VelocitySourceItem<V>>::previous(start_vel)
+                        .to_precision();
+                let vel1 = <V::Item<'static, 'static> as VelocitySourceItem<V>>::current(end_vel)
+                    .to_precision();
                 transform.rotation = hermite_quat(
                     start,
                     end,
@@ -356,7 +362,7 @@ fn ease_rotation_hermite<V: VelocitySource>(
 /// based on the value at `t`.
 ///
 /// When `t` is `0.0`, the result will be equal to `p0`. When `t` is `1.0`, the result will be equal to `p1`.
-pub fn hermite_vec3(p0: Vec3, p1: Vec3, v0: Vec3, v1: Vec3, t: f32) -> Vec3 {
+pub fn hermite_vec3(p0: TVec3, p1: TVec3, v0: TVec3, v1: TVec3, t: f32) -> TVec3 {
     // Reference:
     //
     // Holden, D. "Cubic Interpolation of Quaternions"
@@ -365,6 +371,7 @@ pub fn hermite_vec3(p0: Vec3, p1: Vec3, v0: Vec3, v1: Vec3, t: f32) -> Vec3 {
     // The article is mostly about quaternions, but also describes Hermite interpolation for vectors.
     // For quaternions, we use a different approach. See `hermite_quat`.
 
+    let t = t.to_precision();
     let t2 = t * t;
     let t3 = t2 * t;
 
@@ -389,7 +396,7 @@ pub fn hermite_vec3(p0: Vec3, p1: Vec3, v0: Vec3, v1: Vec3, t: f32) -> Vec3 {
 /// If `unwrap` is `true`, the interpolation will work for arbitrarily large velocities
 /// and handle multiple full revolutions correctly. This is a bit more expensive,
 /// but can be important for high angular velocities.
-pub fn hermite_quat(qa: Quat, qb: Quat, w0: Vec3, w1: Vec3, t: f32, unwrap: bool) -> Quat {
+pub fn hermite_quat(qa: TQuat, qb: TQuat, w0: TVec3, w1: TVec3, t: f32, unwrap: bool) -> TQuat {
     // Reference:
     //
     // Kim M.-J. et al. "A General Construction Scheme for Unit Quaternion Curves with Simple High Order Derivatives".
@@ -398,11 +405,13 @@ pub fn hermite_quat(qa: Quat, qb: Quat, w0: Vec3, w1: Vec3, t: f32, unwrap: bool
     // Note that the paper's angular velocities are defined in the local frame, but our values
     // are in the global frame, so the order of multiplication for quaternions is reversed.
 
+    let t = t.to_precision();
     let t2 = t * t;
     let t3 = t * t2;
 
     // Cumulative Bernstein basis polynomials
-    let b1 = 1.0 - (1.0 - t).cubed();
+    let one_minus_t = 1.0 - t;
+    let b1 = 1.0 - one_minus_t * one_minus_t * one_minus_t;
     let b2 = 3.0 * t2 - 2.0 * t3;
     let b3 = t3;
 
@@ -410,10 +419,10 @@ pub fn hermite_quat(qa: Quat, qb: Quat, w0: Vec3, w1: Vec3, t: f32, unwrap: bool
     let w1_div_3 = w1 / 3.0;
 
     // Advance by a third from initial rotation, with initial velocity.
-    let q1 = Quat::from_scaled_axis(w0_div_3) * qa;
+    let q1 = TQuat::from_scaled_axis(w0_div_3) * qa;
 
     // Back off by a third from final rotation, with final velocity.
-    let q2 = Quat::from_scaled_axis(-w1_div_3) * qb;
+    let q2 = TQuat::from_scaled_axis(-w1_div_3) * qb;
 
     // Calculate fractional rotation needed to go from q0 to q1.
     // q1 = q0 * Quat(w01 / 3)
@@ -422,6 +431,7 @@ pub fn hermite_quat(qa: Quat, qb: Quat, w0: Vec3, w1: Vec3, t: f32, unwrap: bool
     // Add multiples of 2π to the magnitude of w01 / 3 to minimize
     // its distance to the average of w0 / 3 and w1 / 3.
     if unwrap {
+        let tau = TAU.to_precision();
         let average_w_div_3 = w0_div_3.midpoint(w1_div_3);
         let w01_direction = w01_div_3.normalize_or_zero();
 
@@ -434,12 +444,13 @@ pub fn hermite_quat(qa: Quat, qb: Quat, w0: Vec3, w1: Vec3, t: f32, unwrap: bool
         // l dot(n, n) = l = dot(p - a, n)
 
         let extra_angle = w01_direction.dot(average_w_div_3 - w01_div_3);
-        w01_div_3 += ops::round(extra_angle / TAU) * TAU * w01_direction;
+        let revolutions = ops::round((extra_angle / tau).to_render()).to_precision();
+        w01_div_3 += revolutions * tau * w01_direction;
     }
 
     // Rotate by b1 * dt / 3 at initial velocity, then by b2 * dt / 3 at w01, then by b3 * dt / 3 at final velocity.
-    Quat::from_scaled_axis(b3 * w1_div_3)
-        * Quat::from_scaled_axis(b2 * w01_div_3)
-        * Quat::from_scaled_axis(b1 * w0_div_3)
+    TQuat::from_scaled_axis(b3 * w1_div_3)
+        * TQuat::from_scaled_axis(b2 * w01_div_3)
+        * TQuat::from_scaled_axis(b1 * w0_div_3)
         * qa
 }
