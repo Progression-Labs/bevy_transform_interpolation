@@ -2,10 +2,9 @@
 
 use core::{f64::consts::TAU, marker::PhantomData};
 
-use bevy::{
-    math::{TQuat, TVec3, ToPrecision, ToRender},
-    prelude::*,
-};
+use bevy::prelude::*;
+
+use crate::precision::{TQuat, TVec3, ToPrecision, ToRender};
 
 use crate::{
     NoRotationEasing, NoTranslationEasing, NonlinearRotationEasing, NonlinearTranslationEasing,

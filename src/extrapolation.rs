@@ -6,6 +6,7 @@
 use core::marker::PhantomData;
 
 use crate::{
+    precision::ToPrecision,
     NoRotationEasing, NoTranslationEasing, RotationEasingState, TransformEasingPlugin,
     TransformEasingSystems, TranslationEasingState, VelocitySource, VelocitySourceItem,
 };

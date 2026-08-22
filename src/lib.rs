@@ -132,6 +132,7 @@
 
 // Core interpolation and extrapolation plugins
 pub mod extrapolation;
+pub mod precision;
 pub mod interpolation;
 
 // Easing backends
@@ -165,9 +166,10 @@ use interpolation::*;
 
 use bevy::{
     ecs::{change_detection::Tick, query::QueryData, system::SystemChangeTick},
-    math::{TQuat, TVec3, ToPrecision},
     prelude::*,
 };
+
+use crate::precision::{TQuat, TVec3, ToPrecision};
 
 /// A plugin for applying easing to [`Transform`] changes, making movement in [`FixedUpdate`] appear smooth.
 ///
