@@ -18,9 +18,9 @@ use bevy::{
     prelude::*,
 };
 use bevy_transform_interpolation::{
+    VelocitySource,
     extrapolation::{TransformExtrapolation, TransformExtrapolationPlugin},
     prelude::*,
-    VelocitySource,
 };
 
 const MOVEMENT_SPEED: f32 = 250.0;
@@ -187,7 +187,7 @@ struct TimestepText;
 
 fn setup_text(mut commands: Commands) {
     let font = TextFont {
-        font_size: 20.0,
+        font_size: FontSize::Px(20.0),
         ..default()
     };
 
