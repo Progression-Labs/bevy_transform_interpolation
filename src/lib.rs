@@ -112,7 +112,8 @@
 //! - In [`FixedLast`], `start` is set to the current [`Transform`], and `end` is set to the [`Transform`] predicted based on velocity.
 //!
 //! At the start of the [`FixedFirst`] schedule, the states are reset to `None`. If the [`Transform`] is detected to have changed
-//! since the last easing run but *outside* of the fixed timestep schedules, the easing is also reset to `None` to prevent overwriting the change.
+//! since the last easing run but *outside* of the fixed timestep schedules, the easing is also reset to `None` to prevent overwriting the change,
+//! before the fixed timestep runs and again before the easing.
 //!
 //! The actual easing is performed in [`RunFixedMainLoop`], right after [`FixedMain`](bevy::app::FixedMain), before [`Update`].
 //! By default, linear interpolation (`lerp`) is used for translation and scale, and spherical linear interpolation (`slerp`)
@@ -232,9 +233,19 @@ impl Plugin for TransformEasingPlugin {
                 .in_set(TransformEasingSystems::Reset),
         );
 
+        // A `Transform` written outside the fixed timestep is a teleport. Its easing is dropped
+        // before the fixed ticks, which every such write (Update and PostUpdate of the frame
+        // before, First and PreUpdate of this one) precedes: on a frame that ticks, the
+        // interpolation backend's completion in `FixedFirst` would otherwise write the old
+        // easing's end back over the teleport, and the entity would go on from where it was.
+        // Again before the easing, for a write in the ticks that did not become the easing's end.
         app.add_systems(
             RunFixedMainLoop,
-            reset_easing_states_on_transform_change.before(TransformEasingSystems::Ease),
+            (
+                reset_easing_states_on_transform_change
+                    .in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop),
+                reset_easing_states_on_transform_change.before(TransformEasingSystems::Ease),
+            ),
         );
 
         // Perform easing.

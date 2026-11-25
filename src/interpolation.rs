@@ -357,3 +357,86 @@ fn update_scale_interpolation_end(
         easing.end = Some(transform.scale);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate alloc;
+
+    use super::*;
+    use alloc::{format, string::String, vec::Vec};
+    use bevy::{ecs::schedule::ScheduleLabel, time::TimeUpdateStrategy};
+    use core::time::Duration;
+
+    /// What each frame after a teleport shows of an entity moved 1 m per fixed tick in
+    /// `FixedUpdate`: frames at 120 Hz over a 60 Hz step (half the frames tick), its
+    /// `Transform` written to x = 50 from `schedule` on frame `at`.
+    fn shown_after_teleport(schedule: impl ScheduleLabel, at: u32) -> Vec<f32> {
+        #[derive(Resource)]
+        struct Frame(u32);
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, TransformInterpolationPlugin::default()))
+            .insert_resource(Time::<Fixed>::from_hz(60.0))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+                1.0 / 120.0,
+            )))
+            .insert_resource(Frame(0))
+            .add_systems(FixedUpdate, |mut moved: Query<&mut Transform>| {
+                for mut transform in &mut moved {
+                    transform.translation.x += 1.0;
+                }
+            })
+            .add_systems(
+                schedule,
+                move |frame: Res<Frame>, mut moved: Query<&mut Transform>| {
+                    if frame.0 == at {
+                        moved.single_mut().unwrap().translation.x = 50.0;
+                    }
+                },
+            )
+            .add_systems(Last, |mut frame: ResMut<Frame>| frame.0 += 1);
+        app.finish();
+        app.cleanup();
+        let moved = app
+            .world_mut()
+            .spawn((Transform::default(), TransformInterpolation))
+            .id();
+        let mut shown = Vec::new();
+        for frame in 0..at + 6 {
+            app.update();
+            if frame > at {
+                shown.push(app.world().get::<Transform>(moved).unwrap().translation.x);
+            }
+        }
+        shown
+    }
+
+    /// A `Transform` written outside the fixed timestep is a teleport, and every frame after
+    /// it shows the entity from there on: written from `Update` on a frame before one that
+    /// ticks, the reset ran only after the ticks, `complete_translation_easing` wrote the old
+    /// easing's end back over the teleport, and the entity went on from where it had been.
+    /// Each schedule a game writes from, on frames of either parity against the ticks.
+    #[test]
+    fn a_teleport_outside_the_fixed_timestep_is_where_the_entity_goes_on_from() {
+        let schedules: [(&str, fn(u32) -> Vec<f32>); 4] = [
+            ("First", |at| shown_after_teleport(First, at)),
+            ("PreUpdate", |at| shown_after_teleport(PreUpdate, at)),
+            ("Update", |at| shown_after_teleport(Update, at)),
+            ("PostUpdate", |at| shown_after_teleport(PostUpdate, at)),
+        ];
+        let mut wrong: Vec<String> = Vec::new();
+        for (name, shown_after) in schedules {
+            for at in 20..24 {
+                let shown = shown_after(at);
+                if shown.iter().any(|x| !(50.0..54.0).contains(x)) {
+                    wrong.push(format!("{name}, frame {at}: {shown:?}"));
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "shown away from the teleport:\n{}",
+            wrong.join("\n")
+        );
+    }
+}
