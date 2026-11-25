@@ -93,6 +93,7 @@
 //! pub struct TranslationEasingState {
 //!     pub start: Option<TVec3>,
 //!     pub end: Option<TVec3>,
+//!     pub eased: Option<TVec3>,
 //! }
 //! ```
 //!
@@ -243,8 +244,11 @@ impl Plugin for TransformEasingPlugin {
             RunFixedMainLoop,
             (
                 reset_easing_states_on_transform_change
+                    .in_set(TransformEasingSystems::ResetOnTransformChange)
                     .in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop),
-                reset_easing_states_on_transform_change.before(TransformEasingSystems::Ease),
+                reset_easing_states_on_transform_change
+                    .in_set(TransformEasingSystems::ResetOnTransformChange)
+                    .before(TransformEasingSystems::Ease),
             ),
         );
 
@@ -255,10 +259,11 @@ impl Plugin for TransformEasingPlugin {
                 .in_set(TransformEasingSystems::Ease),
         );
 
-        // Update the last easing tick.
+        // Update the last easing tick, and record what the easing wrote.
         app.add_systems(
             RunFixedMainLoop,
-            update_last_easing_tick.in_set(TransformEasingSystems::UpdateEasingTick),
+            (update_last_easing_tick, record_eased_transforms)
+                .in_set(TransformEasingSystems::UpdateEasingTick),
         );
     }
 }
@@ -272,10 +277,14 @@ pub enum TransformEasingSystems {
     UpdateStart,
     /// Updates the `end` values for easing at the end of the fixed timestep.
     UpdateEnd,
+    /// Resets the easing states when [`Transform`] was written outside the fixed timestep (a
+    /// teleport): in [`RunFixedMainLoop`] before the fixed timestep, and again before [`Ease`](Self::Ease).
+    ResetOnTransformChange,
     /// Eases the transform values in between the `start` and `end` states.
     /// Runs in [`RunFixedMainLoop`], right after [`FixedMain`](bevy::app::FixedMain), before [`Update`].
     Ease,
-    /// Updates [`LastEasingTick`], the last tick when easing was performed.
+    /// Updates [`LastEasingTick`], the last tick when easing was performed, and each easing
+    /// state's `eased` value.
     UpdateEasingTick,
 }
 
@@ -457,6 +466,10 @@ pub struct TranslationEasingState {
     pub start: Option<TVec3>,
     /// The end translation for the interpolation.
     pub end: Option<TVec3>,
+    /// The translation the last easing wrote, while there was one to ease (`None` otherwise). A
+    /// [`Transform`] written since with this same value (a system taking `&mut Transform` and
+    /// leaving it) is not a teleport.
+    pub eased: Option<TVec3>,
 }
 
 /// Stores the start and end states used for interpolating the rotation of an entity.
@@ -473,6 +486,10 @@ pub struct RotationEasingState {
     pub start: Option<TQuat>,
     /// The end rotation for the interpolation.
     pub end: Option<TQuat>,
+    /// The rotation the last easing wrote, while there was one to ease (`None` otherwise). A
+    /// [`Transform`] written since with this same value (a system taking `&mut Transform` and
+    /// leaving it) is not a teleport.
+    pub eased: Option<TQuat>,
 }
 
 /// Stores the start and end states used for interpolating the scale of an entity.
@@ -489,6 +506,10 @@ pub struct ScaleEasingState {
     pub start: Option<TVec3>,
     /// The end scale for the interpolation.
     pub end: Option<TVec3>,
+    /// The scale the last easing wrote, while there was one to ease (`None` otherwise). A
+    /// [`Transform`] written since with this same value (a system taking `&mut Transform` and
+    /// leaving it) is not a teleport.
+    pub eased: Option<TVec3>,
 }
 
 fn update_last_easing_tick(
@@ -498,8 +519,50 @@ fn update_last_easing_tick(
     *last_easing_tick = LastEasingTick(system_change_tick.this_run());
 }
 
+/// Records in each easing state what the easing wrote to the [`Transform`] (`eased`), or `None`
+/// where there was nothing to ease. Bookkeeping: written without change detection.
+#[allow(clippy::type_complexity)]
+fn record_eased_transforms(
+    mut query: Query<
+        (
+            &Transform,
+            Option<&mut TranslationEasingState>,
+            Option<&mut RotationEasingState>,
+            Option<&mut ScaleEasingState>,
+        ),
+        Or<(
+            With<TranslationEasingState>,
+            With<RotationEasingState>,
+            With<ScaleEasingState>,
+        )>,
+    >,
+) {
+    query.par_iter_mut().for_each(
+        |(transform, translation_easing, rotation_easing, scale_easing)| {
+            if let Some(mut easing) = translation_easing {
+                let easing = easing.bypass_change_detection();
+                easing.eased = (easing.start.is_some() && easing.end.is_some())
+                    .then_some(transform.translation);
+            }
+            if let Some(mut easing) = rotation_easing {
+                let easing = easing.bypass_change_detection();
+                easing.eased =
+                    (easing.start.is_some() && easing.end.is_some()).then_some(transform.rotation);
+            }
+            if let Some(mut easing) = scale_easing {
+                let easing = easing.bypass_change_detection();
+                easing.eased =
+                    (easing.start.is_some() && easing.end.is_some()).then_some(transform.scale);
+            }
+        },
+    );
+}
+
 /// Resets the easing states to `None` when [`Transform`] is modified outside of the fixed timestep schedules
 /// or interpolation logic. This makes it possible to "teleport" entities in schedules like [`Update`].
+///
+/// A write of the value the easing itself last wrote (`eased`), as from a system that takes
+/// `&mut Transform` and leaves it, is not a teleport and keeps the easing.
 #[allow(clippy::type_complexity, private_interfaces)]
 pub fn reset_easing_states_on_transform_change(
     mut query: Query<
@@ -536,6 +599,7 @@ pub fn reset_easing_states_on_transform_change(
                 && let (Some(start), Some(end)) = (translation_easing.start, translation_easing.end)
                 && transform.translation != start
                 && transform.translation != end
+                && Some(transform.translation) != translation_easing.eased
             {
                 translation_easing.start = None;
                 translation_easing.end = None;
@@ -544,6 +608,7 @@ pub fn reset_easing_states_on_transform_change(
                 && let (Some(start), Some(end)) = (rotation_easing.start, rotation_easing.end)
                 && transform.rotation != start
                 && transform.rotation != end
+                && Some(transform.rotation) != rotation_easing.eased
             {
                 rotation_easing.start = None;
                 rotation_easing.end = None;
@@ -552,6 +617,7 @@ pub fn reset_easing_states_on_transform_change(
                 && let (Some(start), Some(end)) = (scale_easing.start, scale_easing.end)
                 && transform.scale != start
                 && transform.scale != end
+                && Some(transform.scale) != scale_easing.eased
             {
                 scale_easing.start = None;
                 scale_easing.end = None;

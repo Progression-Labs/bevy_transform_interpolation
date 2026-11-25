@@ -404,11 +404,59 @@ mod tests {
         let mut shown = Vec::new();
         for frame in 0..at + 6 {
             app.update();
-            if frame > at {
+            if frame >= at {
                 shown.push(app.world().get::<Transform>(moved).unwrap().translation.x);
             }
         }
         shown
+    }
+
+    /// Each frame's shown x of an entity moved 1 m per fixed tick in `FixedUpdate`, frames at
+    /// 120 Hz over a 60 Hz step, with an `Update` system that marks its `Transform` changed
+    /// without changing it (as a system taking `&mut Transform` and leaving it does) when
+    /// `touched`.
+    fn shown_with_an_unchanged_write(touched: bool) -> Vec<f32> {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, TransformInterpolationPlugin::default()))
+            .insert_resource(Time::<Fixed>::from_hz(60.0))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+                1.0 / 120.0,
+            )))
+            .add_systems(FixedUpdate, |mut moved: Query<&mut Transform>| {
+                for mut transform in &mut moved {
+                    transform.translation.x += 1.0;
+                }
+            });
+        if touched {
+            app.add_systems(Update, |mut moved: Query<&mut Transform>| {
+                for mut transform in &mut moved {
+                    transform.set_changed();
+                }
+            });
+        }
+        app.finish();
+        app.cleanup();
+        let moved = app
+            .world_mut()
+            .spawn((Transform::default(), TransformInterpolation))
+            .id();
+        (0..30)
+            .map(|_| {
+                app.update();
+                app.world().get::<Transform>(moved).unwrap().translation.x
+            })
+            .collect()
+    }
+
+    /// A `Transform` written with the value the easing put there is no teleport: the entity is
+    /// shown frame for frame where it is without the write. Read as one, the easing was dropped
+    /// with the `Transform` at an in-between value, and the entity lost ground every tick.
+    #[test]
+    fn an_unchanged_write_keeps_the_easing() {
+        assert_eq!(
+            shown_with_an_unchanged_write(true),
+            shown_with_an_unchanged_write(false)
+        );
     }
 
     /// A `Transform` written outside the fixed timestep is a teleport, and every frame after
