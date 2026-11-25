@@ -411,11 +411,11 @@ mod tests {
         shown
     }
 
-    /// Each frame's shown x of an entity moved 1 m per fixed tick in `FixedUpdate`, frames at
-    /// 120 Hz over a 60 Hz step, with an `Update` system that marks its `Transform` changed
-    /// without changing it (as a system taking `&mut Transform` and leaving it does) when
-    /// `touched`.
-    fn shown_with_an_unchanged_write(touched: bool) -> Vec<f32> {
+    /// Each frame's shown `Transform` of an entity moved 1 m, turned 0.1 rad and grown 0.1 per
+    /// fixed tick in `FixedUpdate`, frames at 120 Hz over a 60 Hz step, with an `Update` system
+    /// that marks its `Transform` changed without changing it (as a system taking
+    /// `&mut Transform` and leaving it does) when `touched`.
+    fn shown_with_an_unchanged_write(touched: bool) -> Vec<Transform> {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, TransformInterpolationPlugin::default()))
             .insert_resource(Time::<Fixed>::from_hz(60.0))
@@ -425,6 +425,8 @@ mod tests {
             .add_systems(FixedUpdate, |mut moved: Query<&mut Transform>| {
                 for mut transform in &mut moved {
                     transform.translation.x += 1.0;
+                    transform.rotate_y(0.1);
+                    transform.scale += 0.1;
                 }
             });
         if touched {
@@ -443,14 +445,15 @@ mod tests {
         (0..30)
             .map(|_| {
                 app.update();
-                app.world().get::<Transform>(moved).unwrap().translation.x
+                *app.world().get::<Transform>(moved).unwrap()
             })
             .collect()
     }
 
     /// A `Transform` written with the value the easing put there is no teleport: the entity is
-    /// shown frame for frame where it is without the write. Read as one, the easing was dropped
-    /// with the `Transform` at an in-between value, and the entity lost ground every tick.
+    /// shown frame for frame where it is without the write, its translation, rotation and scale.
+    /// Read as one, the easing was dropped with the `Transform` at an in-between value, and the
+    /// entity lost ground every tick.
     #[test]
     fn an_unchanged_write_keeps_the_easing() {
         assert_eq!(
@@ -459,11 +462,60 @@ mod tests {
         );
     }
 
+    /// A `Transform` written after the fixed timestep's last easing update (in `FixedLast`,
+    /// after `UpdateEnd`) on a frame that ticks is neither the easing's start nor its end: the
+    /// reset after the ticks drops the easing and the entity is shown where it was written,
+    /// rather than the easing writing over it.
+    #[test]
+    fn a_write_in_the_ticks_after_the_easing_end_is_kept() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, TransformInterpolationPlugin::default()))
+            .insert_resource(Time::<Fixed>::from_hz(60.0))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+                1.0 / 120.0,
+            )))
+            .add_systems(FixedUpdate, |mut moved: Query<&mut Transform>| {
+                for mut transform in &mut moved {
+                    transform.translation.x += 1.0;
+                }
+            })
+            .add_systems(
+                FixedLast,
+                (|mut ticks: Local<u32>, mut moved: Query<&mut Transform>| {
+                    // On the twentieth tick, once.
+                    *ticks += 1;
+                    if *ticks == 20 {
+                        moved.single_mut().unwrap().translation.x = 50.0;
+                    }
+                })
+                .after(TransformEasingSystems::UpdateEnd),
+            );
+        app.finish();
+        app.cleanup();
+        let moved = app
+            .world_mut()
+            .spawn((Transform::default(), TransformInterpolation))
+            .id();
+        let mut written = None;
+        for frame in 0..60 {
+            app.update();
+            let x = app.world().get::<Transform>(moved).unwrap().translation.x;
+            if written.is_none() && x >= 25.0 {
+                written = Some((frame, x));
+            }
+        }
+        let (frame, x) = written.expect("the write in FixedLast never shown");
+        assert_eq!(x, 50.0, "frame {frame} showed x {x} first, not the 50 written");
+    }
+
     /// A `Transform` written outside the fixed timestep is a teleport, and every frame after
     /// it shows the entity from there on: written from `Update` on a frame before one that
     /// ticks, the reset ran only after the ticks, `complete_translation_easing` wrote the old
     /// easing's end back over the teleport, and the entity went on from where it had been.
-    /// Each schedule a game writes from, on frames of either parity against the ticks.
+    /// Each schedule a game writes from, on frames of either parity against the ticks. The
+    /// teleport's own frame is checked too, which tells something only for `First` and
+    /// `PreUpdate`: a write from `Update` or `PostUpdate` comes after that frame's easing and is
+    /// trivially shown, and the frames after it are what test those two.
     #[test]
     fn a_teleport_outside_the_fixed_timestep_is_where_the_entity_goes_on_from() {
         let schedules: [(&str, fn(u32) -> Vec<f32>); 4] = [

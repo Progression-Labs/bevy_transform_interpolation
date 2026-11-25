@@ -524,6 +524,13 @@ fn update_last_easing_tick(
 
 /// Records in each easing state what the easing wrote to the [`Transform`] (`eased`), or `None`
 /// where there was nothing to ease. Bookkeeping: written without change detection.
+///
+/// "Something to ease" is a state with both `start` and `end`, not proof that a backend wrote
+/// this frame: backends ease through systems of their own (lerp and slerp here, Hermite, any
+/// custom one) and report nothing back, and a per-entity flag from each would cost every backend
+/// a write per entity per frame. The two differ only for a state with `start` and `end` that no
+/// backend eases (an entity whose `Nonlinear*Easing` backend's query does not match it), and
+/// there the cost is that a later write of exactly that recorded value keeps the easing.
 #[allow(clippy::type_complexity)]
 fn record_eased_transforms(
     mut query: Query<
