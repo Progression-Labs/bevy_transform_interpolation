@@ -89,6 +89,7 @@
 //!
 //! ```
 //! # use bevy::prelude::*;
+//! # use bevy_transform_interpolation::precision::TVec3;
 //! #
 //! pub struct TranslationEasingState {
 //!     pub start: Option<TVec3>,
@@ -239,7 +240,8 @@ impl Plugin for TransformEasingPlugin {
         // before, First and PreUpdate of this one) precedes: on a frame that ticks, the
         // interpolation backend's completion in `FixedFirst` would otherwise write the old
         // easing's end back over the teleport, and the entity would go on from where it was.
-        // Again before the easing, for a write in the ticks that did not become the easing's end.
+        // Again after the ticks and before the easing, for a write in the ticks that did not
+        // become the easing's end.
         app.add_systems(
             RunFixedMainLoop,
             (
@@ -248,6 +250,7 @@ impl Plugin for TransformEasingPlugin {
                     .in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop),
                 reset_easing_states_on_transform_change
                     .in_set(TransformEasingSystems::ResetOnTransformChange)
+                    .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop)
                     .before(TransformEasingSystems::Ease),
             ),
         );
